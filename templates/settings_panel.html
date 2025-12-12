@@ -68,6 +68,18 @@
                     <span>Smart Retrieval Mode</span>
                     <small class="openvault-hint">(Use LLM to select most relevant memories)</small>
                 </label>
+
+                <label class="checkbox_label">
+                    <input type="checkbox" id="openvault_auto_hide" />
+                    <span>Auto-hide old messages</span>
+                    <small class="openvault-hint">(Hide messages beyond threshold, memories still injected)</small>
+                </label>
+
+                <label for="openvault_auto_hide_threshold">
+                    Messages to keep visible: <span id="openvault_auto_hide_threshold_value">50</span>
+                </label>
+                <input type="range" id="openvault_auto_hide_threshold" min="10" max="200" step="2" value="50" />
+                <small class="openvault-hint">Messages older than this are hidden (in pairs)</small>
             </div>
 
             <!-- Statistics -->

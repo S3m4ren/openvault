@@ -36,6 +36,9 @@ const defaultSettings = {
     messagesPerExtraction: 5,      // Number of messages to analyze per extraction
     memoryContextCount: 15,        // Number of recent memories to include in extraction prompt
     smartRetrievalEnabled: false,  // Use LLM to select relevant memories
+    // Auto-hide settings
+    autoHideEnabled: true,         // Automatically hide old messages from context
+    autoHideThreshold: 50,         // Keep last N messages visible (hide older ones)
 };
 
 // Operation state machine to prevent concurrent operations
@@ -217,6 +220,19 @@ function bindUIElements() {
         saveSettingsDebounced();
     });
 
+    // Auto-hide toggle
+    $('#openvault_auto_hide').on('change', function() {
+        settings.autoHideEnabled = $(this).is(':checked');
+        saveSettingsDebounced();
+    });
+
+    // Auto-hide threshold slider
+    $('#openvault_auto_hide_threshold').on('input', function() {
+        settings.autoHideThreshold = parseInt($(this).val());
+        $('#openvault_auto_hide_threshold_value').text(settings.autoHideThreshold);
+        saveSettingsDebounced();
+    });
+
     // Manual action buttons
     $('#openvault_extract_btn').on('click', () => extractMemories());
     $('#openvault_retrieve_btn').on('click', () => retrieveAndInjectContext());
@@ -274,6 +290,11 @@ function updateUI() {
     $('#openvault_memory_context_count').val(settings.memoryContextCount);
     $('#openvault_memory_context_count_value').text(settings.memoryContextCount);
     $('#openvault_smart_retrieval').prop('checked', settings.smartRetrievalEnabled);
+
+    // Auto-hide settings
+    $('#openvault_auto_hide').prop('checked', settings.autoHideEnabled);
+    $('#openvault_auto_hide_threshold').val(settings.autoHideThreshold);
+    $('#openvault_auto_hide_threshold_value').text(settings.autoHideThreshold);
 
     // Populate profile selector
     populateProfileSelector();
@@ -550,6 +571,51 @@ function escapeHtml(str) {
 }
 
 /**
+ * Auto-hide old messages beyond the threshold
+ * Hides messages in pairs (user-assistant) to maintain conversation coherence
+ * Messages are marked with is_system=true which excludes them from context
+ */
+async function autoHideOldMessages() {
+    const settings = extension_settings[extensionName];
+    if (!settings.autoHideEnabled) return;
+
+    const context = getContext();
+    const chat = context.chat || [];
+    const threshold = settings.autoHideThreshold || 50;
+
+    // Get visible (non-hidden) messages with their original indices
+    const visibleMessages = chat
+        .map((m, idx) => ({ ...m, idx }))
+        .filter(m => !m.is_system);
+
+    // If we have fewer messages than threshold, nothing to hide
+    if (visibleMessages.length <= threshold) return;
+
+    // Calculate how many messages to hide
+    const toHideCount = visibleMessages.length - threshold;
+
+    // Round down to nearest even number (for pairs)
+    const pairsToHide = Math.floor(toHideCount / 2);
+    const messagesToHide = pairsToHide * 2;
+
+    if (messagesToHide <= 0) return;
+
+    // Hide the oldest messages (they're at the start of visibleMessages array)
+    let hiddenCount = 0;
+    for (let i = 0; i < messagesToHide && i < visibleMessages.length; i++) {
+        const msgIdx = visibleMessages[i].idx;
+        chat[msgIdx].is_system = true;
+        hiddenCount++;
+    }
+
+    if (hiddenCount > 0) {
+        await saveChatConditional();
+        log(`Auto-hid ${hiddenCount} messages (${pairsToHide} pairs) - threshold: ${threshold}`);
+        toastr.info(`Auto-hid ${hiddenCount} old messages`, 'OpenVault');
+    }
+}
+
+/**
  * Handle OpenVault send - does memory retrieval before triggering generation
  * This is the core function that intercepts user input
  */
@@ -569,6 +635,9 @@ async function handleOpenVaultSend() {
     }
 
     try {
+        // Auto-hide old messages before building context
+        await autoHideOldMessages();
+
         setStatus('retrieving');
 
         // Get pending user message for context-aware retrieval
@@ -904,9 +973,11 @@ async function extractMemories(messageIds = null) {
     // Get messages to extract
     let messagesToExtract = [];
     if (messageIds && messageIds.length > 0) {
+        // When specific IDs are provided (e.g., backfill), include hidden messages
+        // This allows extraction from imported chats where messages may be pre-hidden
         messagesToExtract = messageIds
             .map(id => ({ id, ...chat[id] }))
-            .filter(m => m && !m.is_system);
+            .filter(m => m); // Only filter out undefined, allow hidden (is_system) messages
     } else {
         // Extract last few unprocessed messages (configurable count)
         const lastProcessedId = data[LAST_PROCESSED_KEY] || -1;
@@ -1307,13 +1378,13 @@ async function extractAllMessages() {
     const settings = extension_settings[extensionName];
     const messageCount = settings.messagesPerExtraction || 5;
 
-    // Get all non-system messages EXCEPT the last N
-    const allNonSystemIds = chat
-        .map((m, idx) => idx)
-        .filter(idx => !chat[idx].is_system);
+    // Get all message indices (including hidden ones for import/backfill scenarios)
+    // We include hidden messages so users can extract memories from imported chats
+    const allMessageIds = chat
+        .map((m, idx) => idx);
 
     // Exclude the last N messages (they'll be handled by regular/automatic extraction)
-    let messagesToExtract = allNonSystemIds.slice(0, -messageCount);
+    let messagesToExtract = allMessageIds.slice(0, -messageCount);
 
     // Only extract complete batches - truncate to nearest multiple of batch size
     const completeBatches = Math.floor(messagesToExtract.length / messageCount);
@@ -1326,7 +1397,7 @@ async function extractAllMessages() {
     }
 
     if (messagesToExtract.length === 0) {
-        toastr.warning(`No complete batches to extract (need ${messageCount} messages, have ${allNonSystemIds.length - messageCount})`, 'OpenVault');
+        toastr.warning(`No complete batches to extract (need ${messageCount} messages, have ${allMessageIds.length - messageCount})`, 'OpenVault');
         return;
     }
 
@@ -1485,10 +1556,10 @@ async function retrieveAndInjectContext() {
         // Use first POV character for formatting (or main character for narrator mode)
         const primaryCharacter = isGroupChat ? povCharacters[0] : context.name2;
 
-        // Get recent context for relevance matching
+        // Get full visible chat context for relevance matching
+        // Show entire visible history so retrieval AI knows what's already in context
         const recentMessages = chat
             .filter(m => !m.is_system)
-            .slice(-5)
             .map(m => m.mes)
             .join('\n');
 
@@ -1938,10 +2009,10 @@ async function updateInjection(pendingUserMessage = '') {
     // Use first POV character for formatting (or context name for narrator mode)
     const primaryCharacter = isGroupChat ? povCharacters[0] : context.name2;
 
-    // Get recent context for relevance matching
+    // Get full visible chat context for relevance matching
+    // Show entire visible history so retrieval AI knows what's already in context
     let recentMessages = context.chat
         .filter(m => !m.is_system)
-        .slice(-5)
         .map(m => m.mes)
         .join('\n');
 
