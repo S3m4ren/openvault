@@ -1181,15 +1181,16 @@ If no significant events, respond with an empty array: []`;
 async function callLLMForExtraction(prompt) {
     const settings = extension_settings[extensionName];
 
-    // Get profile ID - use extraction profile or fall back to first available
+    // Get profile ID - use extraction profile or fall back to currently selected profile
     let profileId = settings.extractionProfile;
 
-    // If no profile specified, try to use the connection manager's first profile
+    // If no profile specified, use the currently selected profile
     if (!profileId) {
-        const profiles = extension_settings?.connectionManager?.profiles || [];
-        if (profiles.length > 0) {
-            profileId = profiles[0].id;
-            log(`No extraction profile set, using first available: ${profiles[0].name}`);
+        profileId = extension_settings?.connectionManager?.selectedProfile;
+        if (profileId) {
+            const profiles = extension_settings?.connectionManager?.profiles || [];
+            const profile = profiles.find(p => p.id === profileId);
+            log(`No extraction profile set, using current profile: ${profile?.name || profileId}`);
         }
     }
 
