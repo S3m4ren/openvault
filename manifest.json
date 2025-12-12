@@ -1,0 +1,12 @@
+{
+    "display_name": "OpenVault",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "OpenVault",
+    "version": "0.1.0",
+    "homePage": "https://github.com/unkarelian/openvault",
+    "auto_update": false
+}

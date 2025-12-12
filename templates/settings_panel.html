@@ -1,0 +1,175 @@
+<div id="openvault_settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>OpenVault</b>
+            <span id="openvault_status" class="openvault-status ready">Ready</span>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <!-- Main Controls -->
+            <div class="openvault-section">
+                <label class="checkbox_label">
+                    <input type="checkbox" id="openvault_enabled" />
+                    <span>Enable OpenVault</span>
+                </label>
+                <label class="checkbox_label">
+                    <input type="checkbox" id="openvault_automatic" />
+                    <span>Automatic Mode</span>
+                    <small class="openvault-hint">(Extract on message, retrieve before generation)</small>
+                </label>
+            </div>
+
+            <!-- Manual Actions -->
+            <div class="openvault-section">
+                <h4>Manual Actions</h4>
+                <div class="openvault-button-row">
+                    <button id="openvault_extract_btn" class="menu_button">
+                        <i class="fa-solid fa-brain"></i> Extract Memories
+                    </button>
+                    <button id="openvault_retrieve_btn" class="menu_button">
+                        <i class="fa-solid fa-search"></i> Retrieve Context
+                    </button>
+                </div>
+                <button id="openvault_extract_all_btn" class="menu_button wide">
+                    <i class="fa-solid fa-layer-group"></i> Extract All Messages
+                </button>
+            </div>
+
+            <!-- Settings -->
+            <div class="openvault-section">
+                <h4>Settings</h4>
+
+                <label for="openvault_extraction_profile">Extraction Profile</label>
+                <select id="openvault_extraction_profile" class="text_pole">
+                    <option value="">Use current connection</option>
+                </select>
+                <small class="openvault-hint">LLM profile used for memory extraction</small>
+
+                <label for="openvault_token_budget">
+                    Token Budget: <span id="openvault_token_budget_value">1000</span>
+                </label>
+                <input type="range" id="openvault_token_budget" min="200" max="4000" step="100" value="1000" />
+                <small class="openvault-hint">Maximum tokens for injected context</small>
+            </div>
+
+            <!-- Statistics -->
+            <div class="openvault-section">
+                <h4>Statistics</h4>
+                <div class="openvault-stats">
+                    <div class="openvault-stat">
+                        <span class="openvault-stat-value" id="openvault_stat_events">--</span>
+                        <span class="openvault-stat-label">Events</span>
+                    </div>
+                    <div class="openvault-stat">
+                        <span class="openvault-stat-value" id="openvault_stat_characters">--</span>
+                        <span class="openvault-stat-label">Characters</span>
+                    </div>
+                    <div class="openvault-stat">
+                        <span class="openvault-stat-value" id="openvault_stat_relationships">--</span>
+                        <span class="openvault-stat-label">Relationships</span>
+                    </div>
+                </div>
+                <button id="openvault_refresh_stats_btn" class="menu_button">
+                    <i class="fa-solid fa-refresh"></i> Refresh Stats
+                </button>
+            </div>
+
+            <!-- Memory Browser (collapsed by default) -->
+            <div class="openvault-section">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span>Memory Browser</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <div class="openvault-filters">
+                            <select id="openvault_filter_type" class="text_pole">
+                                <option value="">All Types</option>
+                                <option value="action">Actions</option>
+                                <option value="revelation">Revelations</option>
+                                <option value="emotion_shift">Emotion Shifts</option>
+                                <option value="relationship_change">Relationship Changes</option>
+                            </select>
+                            <select id="openvault_filter_character" class="text_pole">
+                                <option value="">All Characters</option>
+                            </select>
+                        </div>
+                        <div id="openvault_memory_list" class="openvault-memory-list">
+                            <p class="openvault-placeholder">No memories yet</p>
+                        </div>
+                        <div class="openvault-pagination">
+                            <button id="openvault_prev_page" class="menu_button" disabled>
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <span id="openvault_page_info">Page 1</span>
+                            <button id="openvault_next_page" class="menu_button" disabled>
+                                <i class="fa-solid fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Character States (collapsed by default) -->
+            <div class="openvault-section">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span>Character States</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <div id="openvault_character_states" class="openvault-character-list">
+                            <p class="openvault-placeholder">No character data yet</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Relationships (collapsed by default) -->
+            <div class="openvault-section">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span>Relationships</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <div id="openvault_relationships" class="openvault-relationship-list">
+                            <p class="openvault-placeholder">No relationship data yet</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Debug -->
+            <div class="openvault-section">
+                <label class="checkbox_label">
+                    <input type="checkbox" id="openvault_debug" />
+                    <span>Debug Mode</span>
+                </label>
+            </div>
+
+            <!-- Danger Zone -->
+            <div class="openvault-section openvault-danger">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span>Danger Zone</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <button id="openvault_delete_chat_btn" class="menu_button danger">
+                            <i class="fa-solid fa-trash"></i> Delete Current Chat Memories
+                        </button>
+                        <button id="openvault_delete_all_btn" class="menu_button danger">
+                            <i class="fa-solid fa-bomb"></i> Delete All Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="openvault-footer">
+                <small>OpenVault v0.1.0 - Free & Open Source Agentic Memory</small>
+            </div>
+        </div>
+    </div>
+</div>
