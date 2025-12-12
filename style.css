@@ -171,6 +171,12 @@
     color: var(--SmartThemeEmColor, #888);
 }
 
+.openvault-memory-importance {
+    font-size: 0.75em;
+    color: var(--SmartThemeQuoteColor, #c90);
+    letter-spacing: -1px;
+}
+
 .openvault-memory-summary {
     font-size: 0.9em;
     margin-bottom: 4px;

@@ -15,7 +15,7 @@
                 <label class="checkbox_label">
                     <input type="checkbox" id="openvault_automatic" />
                     <span>Automatic Mode</span>
-                    <small class="openvault-hint">(Extract on message, retrieve before generation)</small>
+                    <small class="openvault-hint">(Retrieve before AI, extract after AI every N messages)</small>
                 </label>
             </div>
 
@@ -31,7 +31,7 @@
                     </button>
                 </div>
                 <button id="openvault_extract_all_btn" class="menu_button wide">
-                    <i class="fa-solid fa-layer-group"></i> Extract All Messages
+                    <i class="fa-solid fa-layer-group"></i> Backfill Chat History
                 </button>
             </div>
 
@@ -50,6 +50,24 @@
                 </label>
                 <input type="range" id="openvault_token_budget" min="200" max="4000" step="100" value="1000" />
                 <small class="openvault-hint">Maximum tokens for injected context</small>
+
+                <label for="openvault_messages_per_extraction">
+                    Messages per Extraction: <span id="openvault_messages_per_extraction_value">5</span>
+                </label>
+                <input type="range" id="openvault_messages_per_extraction" min="1" max="20" step="1" value="5" />
+                <small class="openvault-hint">Number of messages to analyze when extracting memories</small>
+
+                <label for="openvault_memory_context_count">
+                    Memory Context: <span id="openvault_memory_context_count_value">15</span>
+                </label>
+                <input type="range" id="openvault_memory_context_count" min="0" max="50" step="5" value="15" />
+                <small class="openvault-hint">Include recent memories in extraction for consistency (0 to disable)</small>
+
+                <label class="checkbox_label">
+                    <input type="checkbox" id="openvault_smart_retrieval" />
+                    <span>Smart Retrieval Mode</span>
+                    <small class="openvault-hint">(Use LLM to select most relevant memories)</small>
+                </label>
             </div>
 
             <!-- Statistics -->
@@ -168,7 +186,7 @@
 
             <!-- Footer -->
             <div class="openvault-footer">
-                <small>OpenVault v0.1.0 - Free & Open Source Agentic Memory</small>
+                <small>OpenVault v0.2.0 - Free & Open Source Agentic Memory</small>
             </div>
         </div>
     </div>

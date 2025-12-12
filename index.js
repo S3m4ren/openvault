@@ -30,6 +30,18 @@ const defaultSettings = {
     tokenBudget: 1000,
     maxMemoriesPerRetrieval: 10,
     debugMode: false,
+    // Phase 6 settings
+    messagesPerExtraction: 5,      // Number of messages to analyze per extraction
+    memoryContextCount: 15,        // Number of recent memories to include in extraction prompt
+    smartRetrievalEnabled: false,  // Use LLM to select relevant memories
+};
+
+// Operation state machine to prevent concurrent operations
+const operationState = {
+    generationInProgress: false,
+    extractionInProgress: false,
+    retrievalInProgress: false,
+    pendingInjectionUpdate: false,
 };
 
 /**
@@ -127,6 +139,26 @@ function bindUIElements() {
         saveSettingsDebounced();
     });
 
+    // Messages per extraction slider
+    $('#openvault_messages_per_extraction').on('input', function() {
+        settings.messagesPerExtraction = parseInt($(this).val());
+        $('#openvault_messages_per_extraction_value').text(settings.messagesPerExtraction);
+        saveSettingsDebounced();
+    });
+
+    // Memory context count slider
+    $('#openvault_memory_context_count').on('input', function() {
+        settings.memoryContextCount = parseInt($(this).val());
+        $('#openvault_memory_context_count_value').text(settings.memoryContextCount);
+        saveSettingsDebounced();
+    });
+
+    // Smart retrieval toggle
+    $('#openvault_smart_retrieval').on('change', function() {
+        settings.smartRetrievalEnabled = $(this).is(':checked');
+        saveSettingsDebounced();
+    });
+
     // Manual action buttons
     $('#openvault_extract_btn').on('click', () => extractMemories());
     $('#openvault_retrieve_btn').on('click', () => retrieveAndInjectContext());
@@ -177,6 +209,13 @@ function updateUI() {
     $('#openvault_token_budget').val(settings.tokenBudget);
     $('#openvault_token_budget_value').text(settings.tokenBudget);
     $('#openvault_debug').prop('checked', settings.debugMode);
+
+    // Phase 6 settings
+    $('#openvault_messages_per_extraction').val(settings.messagesPerExtraction);
+    $('#openvault_messages_per_extraction_value').text(settings.messagesPerExtraction);
+    $('#openvault_memory_context_count').val(settings.memoryContextCount);
+    $('#openvault_memory_context_count_value').text(settings.memoryContextCount);
+    $('#openvault_smart_retrieval').prop('checked', settings.smartRetrievalEnabled);
 
     // Populate profile selector
     populateProfileSelector();
@@ -266,10 +305,15 @@ function renderMemoryBrowser() {
                 ? `<div class="openvault-memory-witnesses">Witnesses: ${memory.witnesses.join(', ')}</div>`
                 : '';
 
+            // Importance stars
+            const importance = memory.importance || 3;
+            const stars = '★'.repeat(importance) + '☆'.repeat(5 - importance);
+
             $list.append(`
                 <div class="openvault-memory-item ${typeClass}" data-id="${memory.id}">
                     <div class="openvault-memory-header">
                         <span class="openvault-memory-type">${escapeHtml(memory.event_type || 'event')}</span>
+                        <span class="openvault-memory-importance" title="Importance: ${importance}/5">${stars}</span>
                         <span class="openvault-memory-date">${date}</span>
                     </div>
                     <div class="openvault-memory-summary">${escapeHtml(memory.summary || 'No summary')}</div>
@@ -454,22 +498,50 @@ function updateEventListeners() {
     const settings = extension_settings[extensionName];
 
     // Remove existing listeners first
+    eventSource.removeListener(event_types.GENERATION_AFTER_COMMANDS, onBeforeGeneration);
+    eventSource.removeListener(event_types.GENERATION_ENDED, onGenerationEnded);
     eventSource.removeListener(event_types.MESSAGE_RECEIVED, onMessageReceived);
-    eventSource.removeListener(event_types.GENERATION_STARTED, onGenerationStarted);
     eventSource.removeListener(event_types.CHAT_CHANGED, onChatChanged);
+
+    // Reset operation state
+    operationState.generationInProgress = false;
+    operationState.extractionInProgress = false;
+    operationState.retrievalInProgress = false;
+    operationState.pendingInjectionUpdate = false;
 
     // Add listeners if enabled and automatic mode is on
     if (settings.enabled && settings.automaticMode) {
+        // GENERATION_AFTER_COMMANDS: Fires after slash commands but BEFORE generation
+        // This is the correct hook point - same as Quick Replies uses
+        eventSource.on(event_types.GENERATION_AFTER_COMMANDS, onBeforeGeneration);
+        // GENERATION_ENDED: Clear generation lock, process pending updates
+        eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
+        // MESSAGE_RECEIVED: Extract after AI responds (LLM call happens here, safely after generation)
         eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
-        eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
         eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
-        log('Automatic mode enabled - event listeners attached');
-        // Initialize the injection immediately
-        updatePersistentInjection();
+        log('Automatic mode enabled - listening for generation and message events');
+        // Initialize the injection (async, handle errors)
+        updateInjection().catch(err => console.error('OpenVault: Init injection error:', err));
     } else {
         // Clear injection when disabled/manual
         setExtensionPrompt(extensionName, '', extension_prompt_types.IN_CHAT, 0);
         log('Manual mode - event listeners removed, injection cleared');
+    }
+}
+
+/**
+ * Handle generation ended event
+ * Clears the generation lock and processes any pending updates
+ */
+function onGenerationEnded() {
+    operationState.generationInProgress = false;
+    log('Generation ended, clearing lock');
+
+    // If there was a pending injection update, do it now
+    if (operationState.pendingInjectionUpdate) {
+        operationState.pendingInjectionUpdate = false;
+        log('Processing pending injection update');
+        updateInjection().catch(err => console.error('OpenVault: Pending injection error:', err));
     }
 }
 
@@ -480,33 +552,154 @@ async function onChatChanged() {
     const settings = extension_settings[extensionName];
     if (!settings.enabled || !settings.automaticMode) return;
 
-    log('Chat changed, updating injection');
+    log('Chat changed, scheduling injection update');
+
+    // If generation is happening, defer the update
+    if (operationState.generationInProgress) {
+        operationState.pendingInjectionUpdate = true;
+        log('Generation in progress, deferring chat change update');
+        return;
+    }
+
     // Small delay to ensure chat metadata is loaded
-    setTimeout(() => updatePersistentInjection(), 500);
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Check again after delay - generation might have started
+    if (operationState.generationInProgress) {
+        operationState.pendingInjectionUpdate = true;
+        log('Generation started during delay, deferring update');
+        return;
+    }
+
+    try {
+        await updateInjection();
+    } catch (error) {
+        console.error('OpenVault: Chat change injection error:', error);
+    }
 }
 
 /**
  * Handle message received event (automatic mode)
+ * Extracts memories AFTER AI responds - this avoids conflicts with generation
+ * Excludes the last user+assistant pair to avoid extracting swiped messages
  */
 async function onMessageReceived(messageId) {
     const settings = extension_settings[extensionName];
     if (!settings.enabled || !settings.automaticMode) return;
 
-    log(`Message received: ${messageId}, queuing extraction`);
-    await extractMemories([messageId]);
-    // Update injection after new memories are extracted
-    await updatePersistentInjection();
+    // Don't extract during generation or if already extracting
+    if (operationState.generationInProgress) {
+        log('Skipping extraction - generation still in progress');
+        return;
+    }
+    if (operationState.extractionInProgress) {
+        log('Skipping extraction - extraction already in progress');
+        return;
+    }
+
+    const context = getContext();
+    const chat = context.chat || [];
+    const message = chat[messageId];
+
+    // Only extract after AI messages (not user messages)
+    // This ensures extraction happens after generation completes, avoiding ECONNRESET
+    if (!message || message.is_user || message.is_system) {
+        log(`Message ${messageId} is user/system message, skipping extraction`);
+        return;
+    }
+
+    log(`AI message received: ${messageId}, checking if extraction needed`);
+
+    // Check if we should extract (every N messages)
+    const data = getOpenVaultData();
+    const lastProcessedId = data[LAST_PROCESSED_KEY] || -1;
+    const messageCount = settings.messagesPerExtraction || 5;
+
+    // Get extractable messages: exclude the last 2 messages (most recent user + assistant)
+    // This prevents extracting messages that might be swiped
+    const nonSystemMessages = chat
+        .map((m, idx) => ({ ...m, idx }))
+        .filter(m => !m.is_system);
+
+    // Exclude last 2 messages (the user message that triggered this + the AI response)
+    const safeMessages = nonSystemMessages.slice(0, -2);
+
+    // Count unprocessed safe messages
+    const unprocessedMessages = safeMessages.filter(m => m.idx > lastProcessedId);
+
+    // Extract if we have enough unprocessed messages
+    if (unprocessedMessages.length >= messageCount) {
+        log(`Automatic extraction: ${unprocessedMessages.length} unprocessed messages (threshold: ${messageCount}), excluding last 2`);
+
+        operationState.extractionInProgress = true;
+        try {
+            // Extract only the safe message IDs (excluding last user+assistant pair)
+            const safeMessageIds = unprocessedMessages.slice(-messageCount).map(m => m.idx);
+            await extractMemories(safeMessageIds);
+
+            // Update injection for next generation (if not currently generating)
+            if (!operationState.generationInProgress) {
+                await updateInjection();
+            } else {
+                operationState.pendingInjectionUpdate = true;
+            }
+        } catch (error) {
+            console.error('[OpenVault] Automatic extraction error:', error);
+        } finally {
+            operationState.extractionInProgress = false;
+        }
+    } else {
+        log(`Skipping extraction: only ${unprocessedMessages.length} safe unprocessed messages (threshold: ${messageCount})`);
+    }
 }
 
 /**
- * Handle generation started event (automatic mode)
+ * Handle before-generation event (automatic mode)
+ * Uses GENERATION_AFTER_COMMANDS which fires AFTER slash commands but BEFORE generation
+ * This is the correct hook point - same pattern Quick Replies uses
+ * ST awaits async handlers, so retrieval completes before generation proceeds
  */
-async function onGenerationStarted() {
+async function onBeforeGeneration(generationType, options = {}, isDryRun = false) {
     const settings = extension_settings[extensionName];
     if (!settings.enabled || !settings.automaticMode) return;
 
-    log('Generation starting, updating injection');
-    await updatePersistentInjection();
+    // Skip dry runs (just calculating token counts, not actual generation)
+    if (isDryRun) {
+        log('Before-generation hook skipped due to dryRun');
+        return;
+    }
+
+    const context = getContext();
+    const chat = context.chat || [];
+
+    // Only proceed if the last message was from the user (not a swipe/regenerate)
+    const lastMessage = chat[chat.length - 1];
+    if (!lastMessage || !lastMessage.is_user) {
+        log('Before-generation: last message is not from user, skipping');
+        return;
+    }
+
+    // Prevent concurrent operations
+    if (operationState.retrievalInProgress) {
+        log('Retrieval already in progress, using existing injection');
+        return;
+    }
+
+    operationState.generationInProgress = true;
+    operationState.retrievalInProgress = true;
+
+    try {
+        log('Before generation, performing retrieval (smart if enabled)...');
+        // ST awaits this handler, so the LLM call will complete before generation proceeds
+        await updateInjection();
+        log('Retrieval complete, generation can proceed');
+    } catch (error) {
+        console.error('OpenVault: Error during pre-generation retrieval:', error);
+        // Fall back to whatever injection was already set
+    } finally {
+        operationState.retrievalInProgress = false;
+        // Note: generationInProgress stays true until GENERATION_ENDED
+    }
 }
 
 /**
@@ -537,12 +730,13 @@ async function extractMemories(messageIds = null) {
             .map(id => ({ id, ...chat[id] }))
             .filter(m => m && !m.is_system);
     } else {
-        // Extract last few unprocessed messages
+        // Extract last few unprocessed messages (configurable count)
         const lastProcessedId = data[LAST_PROCESSED_KEY] || -1;
+        const messageCount = settings.messagesPerExtraction || 5;
         messagesToExtract = chat
             .map((m, idx) => ({ id: idx, ...m }))
             .filter(m => !m.is_system && m.id > lastProcessedId)
-            .slice(-5);
+            .slice(-messageCount);
     }
 
     if (messagesToExtract.length === 0) {
@@ -563,7 +757,11 @@ async function extractMemories(messageIds = null) {
             return `[${speaker}]: ${m.mes}`;
         }).join('\n\n');
 
-        const extractionPrompt = buildExtractionPrompt(messagesText, characterName, userName);
+        // Get existing memories for context (to avoid duplicates and maintain consistency)
+        const memoryContextCount = settings.memoryContextCount || 0;
+        const existingMemories = getRecentMemoriesForContext(memoryContextCount);
+
+        const extractionPrompt = buildExtractionPrompt(messagesText, characterName, userName, existingMemories);
 
         // Call LLM for extraction
         const extractedJson = await callLLMForExtraction(extractionPrompt);
@@ -609,36 +807,84 @@ async function extractMemories(messageIds = null) {
 }
 
 /**
- * Build the extraction prompt
+ * Get recent memories for context during extraction
+ * @param {number} count - Number of recent memories to retrieve
+ * @returns {Object[]} - Array of recent memory objects
  */
-function buildExtractionPrompt(messagesText, characterName, userName) {
+function getRecentMemoriesForContext(count) {
+    if (count <= 0) return [];
+
+    const data = getOpenVaultData();
+    const memories = data[MEMORIES_KEY] || [];
+
+    // Sort by sequence/creation time (newest first) and take the requested count
+    const sorted = [...memories].sort((a, b) => {
+        const seqA = a.sequence ?? a.created_at ?? 0;
+        const seqB = b.sequence ?? b.created_at ?? 0;
+        return seqB - seqA;
+    });
+
+    return sorted.slice(0, count);
+}
+
+/**
+ * Build the extraction prompt
+ * @param {string} messagesText - Formatted messages to analyze
+ * @param {string} characterName - Main character name
+ * @param {string} userName - User character name
+ * @param {Object[]} existingMemories - Recent memories for context (optional)
+ */
+function buildExtractionPrompt(messagesText, characterName, userName, existingMemories = []) {
+    // Build memory context section if we have existing memories
+    let memoryContextSection = '';
+    if (existingMemories && existingMemories.length > 0) {
+        const memorySummaries = existingMemories
+            .sort((a, b) => (a.sequence ?? a.created_at ?? 0) - (b.sequence ?? b.created_at ?? 0))
+            .map((m, i) => `${i + 1}. [${m.event_type || 'event'}] ${m.summary}`)
+            .join('\n');
+
+        memoryContextSection = `
+## Previously Established Memories
+The following events have already been recorded. Use this context to:
+- Avoid duplicating already-recorded events
+- Maintain consistency with established facts
+- Build upon existing character developments
+
+${memorySummaries}
+
+`;
+    }
+
     return `You are analyzing roleplay messages to extract structured memory events.
 
 ## Characters
 - Main character: ${characterName}
 - User's character: ${userName}
-
+${memoryContextSection}
 ## Messages to analyze:
 ${messagesText}
 
 ## Task
-Extract significant events from these messages. For each event, identify:
+Extract NEW significant events from these messages. For each event, identify:
 1. **event_type**: One of: "action", "revelation", "emotion_shift", "relationship_change"
-2. **summary**: Brief description of what happened (1-2 sentences)
-3. **characters_involved**: List of character names directly involved
-4. **witnesses**: List of character names who observed this (important for POV filtering)
-5. **location**: Where this happened (if mentioned, otherwise "unknown")
-6. **is_secret**: Whether this information should only be known by witnesses
-7. **emotional_impact**: Object mapping character names to emotional changes (e.g., {"${characterName}": "growing trust", "${userName}": "surprised"})
-8. **relationship_impact**: Object describing relationship changes (e.g., {"${characterName}->${userName}": "trust increased"})
+2. **importance**: 1-5 scale (1=minor detail, 2=notable, 3=significant, 4=major event, 5=critical/story-changing)
+3. **summary**: Brief description of what happened (1-2 sentences)
+4. **characters_involved**: List of character names directly involved
+5. **witnesses**: List of character names who observed this (important for POV filtering)
+6. **location**: Where this happened (if mentioned, otherwise "unknown")
+7. **is_secret**: Whether this information should only be known by witnesses
+8. **emotional_impact**: Object mapping character names to emotional changes (e.g., {"${characterName}": "growing trust", "${userName}": "surprised"})
+9. **relationship_impact**: Object describing relationship changes (e.g., {"${characterName}->${userName}": "trust increased"})
 
 Only extract events that are significant for character memory and story continuity. Skip mundane exchanges.
+${existingMemories.length > 0 ? 'Do NOT duplicate events from the "Previously Established Memories" section.' : ''}
 
 Respond with a JSON array of events:
 \`\`\`json
 [
   {
     "event_type": "...",
+    "importance": 3,
     "summary": "...",
     "characters_involved": [...],
     "witnesses": [...],
@@ -735,16 +981,23 @@ function parseExtractionResult(jsonString, messages, characterName, userName) {
         const parsed = JSON.parse(cleaned.trim());
         const events = Array.isArray(parsed) ? parsed : [parsed];
 
+        // Get message IDs for sequence ordering
+        const messageIds = messages.map(m => m.id);
+        const minMessageId = Math.min(...messageIds);
+
         // Enrich events with metadata
-        return events.map(event => ({
+        return events.map((event, index) => ({
             id: generateId(),
             ...event,
-            message_ids: messages.map(m => m.id),
+            message_ids: messageIds,
+            // Sequence is based on the earliest message ID, with sub-index for multiple events from same batch
+            sequence: minMessageId * 1000 + index,
             created_at: Date.now(),
             characters_involved: event.characters_involved || [],
             witnesses: event.witnesses || event.characters_involved || [],
             location: event.location || 'unknown',
             is_secret: event.is_secret || false,
+            importance: Math.min(5, Math.max(1, event.importance || 3)), // Clamp to 1-5, default 3
             emotional_impact: event.emotional_impact || {},
             relationship_impact: event.relationship_impact || {},
         }));
@@ -849,7 +1102,9 @@ function updateRelationshipsFromEvents(events, data) {
 }
 
 /**
- * Extract memories from all messages in current chat
+ * Extract memories from all messages EXCEPT the last N in current chat
+ * N is determined by the messagesPerExtraction setting
+ * This backfills chat history, leaving recent messages for automatic extraction
  */
 async function extractAllMessages() {
     const context = getContext();
@@ -860,39 +1115,48 @@ async function extractAllMessages() {
         return;
     }
 
+    const settings = extension_settings[extensionName];
+    const messageCount = settings.messagesPerExtraction || 5;
+
+    // Get all non-system messages EXCEPT the last N
+    const allNonSystemIds = chat
+        .map((m, idx) => idx)
+        .filter(idx => !chat[idx].is_system);
+
+    // Exclude the last N messages (they'll be handled by regular/automatic extraction)
+    const messagesToExtract = allNonSystemIds.slice(0, -messageCount);
+
+    if (messagesToExtract.length === 0) {
+        toastr.warning('No messages to extract (all messages are within the last N)', 'OpenVault');
+        return;
+    }
+
+    toastr.info(`Extracting ${messagesToExtract.length} messages (excluding last ${messageCount})...`, 'OpenVault');
+
     // Reset last processed to start fresh
     const data = getOpenVaultData();
     data[LAST_PROCESSED_KEY] = -1;
 
-    const allMessageIds = chat
-        .map((m, idx) => idx)
-        .filter(idx => !chat[idx].is_system);
-
-    if (allMessageIds.length === 0) {
-        toastr.warning('No extractable messages found', 'OpenVault');
-        return;
-    }
-
-    toastr.info(`Extracting ${allMessageIds.length} messages...`, 'OpenVault');
-
-    // Process in batches of 5
-    const batchSize = 5;
+    // Process in batches
+    const batchSize = messageCount;
     let totalEvents = 0;
 
-    for (let i = 0; i < allMessageIds.length; i += batchSize) {
-        const batch = allMessageIds.slice(i, i + batchSize);
+    for (let i = 0; i < messagesToExtract.length; i += batchSize) {
+        const batch = messagesToExtract.slice(i, i + batchSize);
         try {
             const result = await extractMemories(batch);
             totalEvents += result?.events_created || 0;
 
-            // Small delay between batches
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Small delay between batches to avoid rate limiting
+            if (i + batchSize < messagesToExtract.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
         } catch (error) {
             console.error('[OpenVault] Batch extraction error:', error);
         }
     }
 
-    toastr.success(`Extracted ${totalEvents} total events`, 'OpenVault');
+    toastr.success(`Extracted ${totalEvents} events from ${messagesToExtract.length} messages`, 'OpenVault');
     refreshAllUI();
 }
 
@@ -925,28 +1189,36 @@ async function retrieveAndInjectContext() {
     setStatus('retrieving');
 
     try {
-        const characterName = context.name2;
         const userName = context.name1;
         const activeCharacters = getActiveCharacters();
 
-        // Get character's known events (POV filtering)
-        const characterState = data[CHARACTERS_KEY]?.[characterName];
-        const knownEventIds = characterState?.known_events || [];
+        // Get POV context (different behavior for group chat vs narrator mode)
+        const { povCharacters, isGroupChat } = getPOVContext();
 
-        // Filter memories by POV - only what this character knows
-        // Use case-insensitive matching for character names
-        const charNameLower = characterName.toLowerCase();
+        // Collect known events from all POV characters
+        const knownEventIds = new Set();
+        for (const charName of povCharacters) {
+            const charState = data[CHARACTERS_KEY]?.[charName];
+            if (charState?.known_events) {
+                for (const eventId of charState.known_events) {
+                    knownEventIds.add(eventId);
+                }
+            }
+        }
+
+        // Filter memories by POV - memories that ANY of the POV characters know
+        const povCharactersLower = povCharacters.map(c => c.toLowerCase());
         const accessibleMemories = memories.filter(m => {
-            // Character was a witness (case-insensitive)
-            if (m.witnesses?.some(w => w.toLowerCase() === charNameLower)) return true;
-            // Non-secret events that character might know about (case-insensitive)
-            if (!m.is_secret && m.characters_involved?.some(c => c.toLowerCase() === charNameLower)) return true;
-            // Explicitly in known events
-            if (knownEventIds.includes(m.id)) return true;
+            // Any POV character was a witness (case-insensitive)
+            if (m.witnesses?.some(w => povCharactersLower.includes(w.toLowerCase()))) return true;
+            // Non-secret events that any POV character is involved in
+            if (!m.is_secret && m.characters_involved?.some(c => povCharactersLower.includes(c.toLowerCase()))) return true;
+            // Explicitly in any POV character's known events
+            if (knownEventIds.has(m.id)) return true;
             return false;
         });
 
-        log(`POV filter: character="${characterName}", total=${memories.length}, accessible=${accessibleMemories.length}`);
+        log(`POV filter: mode=${isGroupChat ? 'group' : 'narrator'}, characters=[${povCharacters.join(', ')}], total=${memories.length}, accessible=${accessibleMemories.length}`);
 
         // If POV filtering is too strict, fall back to all memories with a warning
         let memoriesToUse = accessibleMemories;
@@ -961,6 +1233,9 @@ async function retrieveAndInjectContext() {
             return null;
         }
 
+        // Use first POV character for formatting (or main character for narrator mode)
+        const primaryCharacter = isGroupChat ? povCharacters[0] : context.name2;
+
         // Get recent context for relevance matching
         const recentMessages = chat
             .filter(m => !m.is_system)
@@ -972,7 +1247,7 @@ async function retrieveAndInjectContext() {
         const relevantMemories = await selectRelevantMemories(
             memoriesToUse,
             recentMessages,
-            characterName,
+            primaryCharacter,
             activeCharacters,
             settings.maxMemoriesPerRetrieval
         );
@@ -983,18 +1258,22 @@ async function retrieveAndInjectContext() {
             return null;
         }
 
-        // Get relationship context
-        const relationshipContext = getRelationshipContext(data, characterName, activeCharacters);
+        // Get relationship context for the primary character
+        const relationshipContext = getRelationshipContext(data, primaryCharacter, activeCharacters);
 
-        // Get emotional state
-        const emotionalState = characterState?.current_emotion || 'neutral';
+        // Get emotional state of primary character
+        const primaryCharState = data[CHARACTERS_KEY]?.[primaryCharacter];
+        const emotionalState = primaryCharState?.current_emotion || 'neutral';
+
+        // Format header based on mode
+        const headerName = isGroupChat ? primaryCharacter : 'Scene';
 
         // Format and inject context
         const formattedContext = formatContextForInjection(
             relevantMemories,
             relationshipContext,
             emotionalState,
-            characterName,
+            headerName,
             settings.tokenBudget
         );
 
@@ -1014,16 +1293,21 @@ async function retrieveAndInjectContext() {
 }
 
 /**
- * Select relevant memories using LLM or simple matching
+ * Select relevant memories using simple scoring (fast mode)
  */
-async function selectRelevantMemories(memories, recentContext, characterName, activeCharacters, limit) {
+function selectRelevantMemoriesSimple(memories, recentContext, characterName, activeCharacters, limit) {
     // Simple relevance scoring based on:
-    // 1. Recency
-    // 2. Character involvement
-    // 3. Keyword matching
+    // 1. Importance (highest weight)
+    // 2. Recency
+    // 3. Character involvement
+    // 4. Keyword matching
 
     const scored = memories.map(memory => {
         let score = 0;
+
+        // Importance bonus (major factor: 0-20 points based on 1-5 scale)
+        const importance = memory.importance || 3;
+        score += importance * 4; // 4, 8, 12, 16, 20 points
 
         // Recency bonus (newer = higher)
         const age = Date.now() - memory.created_at;
@@ -1055,6 +1339,112 @@ async function selectRelevantMemories(memories, recentContext, characterName, ac
     // Sort by score and take top N
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit).map(s => s.memory);
+}
+
+/**
+ * Select relevant memories using LLM (smart mode)
+ * @param {Object[]} memories - Available memories to select from
+ * @param {string} recentContext - Recent chat context
+ * @param {string} characterName - POV character name
+ * @param {number} limit - Maximum memories to select
+ * @returns {Promise<Object[]>} - Selected memories
+ */
+async function selectRelevantMemoriesSmart(memories, recentContext, characterName, limit) {
+    if (memories.length === 0) return [];
+    if (memories.length <= limit) return memories; // No need to select if we have few enough
+
+    log(`Smart retrieval: analyzing ${memories.length} memories to select ${limit} most relevant`);
+
+    // Build numbered list of memories with importance
+    const numberedList = memories.map((m, i) => {
+        const typeTag = `[${m.event_type || 'event'}]`;
+        const importance = m.importance || 3;
+        const importanceTag = `[★${'★'.repeat(importance - 1)}]`; // Show 1-5 stars
+        const secretTag = m.is_secret ? '[Secret] ' : '';
+        return `${i + 1}. ${typeTag} ${importanceTag} ${secretTag}${m.summary}`;
+    }).join('\n');
+
+    const prompt = `You are a narrative memory analyzer. Given the current roleplay scene and a list of available memories, select which memories are most relevant for the AI to reference in its response.
+
+CURRENT SCENE:
+${recentContext}
+
+AVAILABLE MEMORIES (numbered):
+${numberedList}
+
+[Task]: Select up to ${limit} memories that would be most useful for ${characterName} to know for the current scene. Consider:
+- Importance level (★ to ★★★★★) - higher importance events are more critical to the story
+- Direct relevance to current conversation topics
+- Character relationships being discussed
+- Background context that explains current situations
+- Emotional continuity
+- Secrets the character knows
+
+[Return]: JSON object with selected memory numbers (1-indexed) and brief reasoning:
+{"selected": [1, 4, 7], "reasoning": "Brief explanation of why these memories are relevant"}
+
+Only return valid JSON, no markdown formatting.`;
+
+    try {
+        const response = await callLLMForExtraction(prompt);
+
+        if (!response) {
+            log('Smart retrieval: No response from LLM, falling back to simple mode');
+            return selectRelevantMemoriesSimple(memories, recentContext, characterName, [], limit);
+        }
+
+        // Parse the response
+        let parsed;
+        try {
+            // Handle potential markdown code blocks
+            let cleaned = response;
+            const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+            if (jsonMatch) {
+                cleaned = jsonMatch[1];
+            }
+            parsed = JSON.parse(cleaned.trim());
+        } catch (parseError) {
+            log(`Smart retrieval: Failed to parse LLM response, falling back to simple mode. Error: ${parseError.message}`);
+            return selectRelevantMemoriesSimple(memories, recentContext, characterName, [], limit);
+        }
+
+        // Extract selected indices
+        const selectedIndices = parsed.selected || [];
+        if (!Array.isArray(selectedIndices) || selectedIndices.length === 0) {
+            log('Smart retrieval: No memories selected by LLM, falling back to simple mode');
+            return selectRelevantMemoriesSimple(memories, recentContext, characterName, [], limit);
+        }
+
+        // Convert 1-indexed to 0-indexed and filter valid indices
+        const selectedMemories = selectedIndices
+            .map(i => memories[i - 1]) // Convert to 0-indexed
+            .filter(m => m !== undefined);
+
+        if (selectedMemories.length === 0) {
+            log('Smart retrieval: Invalid indices from LLM, falling back to simple mode');
+            return selectRelevantMemoriesSimple(memories, recentContext, characterName, [], limit);
+        }
+
+        log(`Smart retrieval: LLM selected ${selectedMemories.length} memories. Reasoning: ${parsed.reasoning || 'none provided'}`);
+        return selectedMemories;
+    } catch (error) {
+        log(`Smart retrieval error: ${error.message}, falling back to simple mode`);
+        return selectRelevantMemoriesSimple(memories, recentContext, characterName, [], limit);
+    }
+}
+
+/**
+ * Select relevant memories using LLM or simple matching (dispatcher)
+ * Uses smart retrieval if enabled in settings
+ */
+async function selectRelevantMemories(memories, recentContext, characterName, activeCharacters, limit) {
+    const settings = extension_settings[extensionName];
+
+    if (settings.smartRetrievalEnabled) {
+        return selectRelevantMemoriesSmart(memories, recentContext, characterName, limit);
+    } else {
+        return selectRelevantMemoriesSimple(memories, recentContext, characterName, activeCharacters, limit);
+    }
 }
 
 /**
@@ -1091,7 +1481,12 @@ function getRelationshipContext(data, povCharacter, activeCharacters) {
 function formatContextForInjection(memories, relationships, emotionalState, characterName, tokenBudget) {
     const lines = [];
 
+    // Get current message number for context
+    const context = getContext();
+    const currentMessageNum = context.chat?.length || 0;
+
     lines.push(`[${characterName}'s Memory & State]`);
+    lines.push(`(Current message: #${currentMessageNum})`);
     lines.push('');
 
     // Emotional state
@@ -1111,13 +1506,33 @@ function formatContextForInjection(memories, relationships, emotionalState, char
         lines.push('');
     }
 
-    // Memories
+    // Memories - sorted by sequence (chronological order) with message numbers
     if (memories && memories.length > 0) {
-        lines.push('Relevant memories:');
-        for (const memory of memories) {
+        // Sort by sequence number (earlier events first)
+        const sortedMemories = [...memories].sort((a, b) => {
+            const seqA = a.sequence ?? a.created_at ?? 0;
+            const seqB = b.sequence ?? b.created_at ?? 0;
+            return seqA - seqB;
+        });
+
+        lines.push('Relevant memories (in chronological order):');
+        sortedMemories.forEach((memory, index) => {
             const prefix = memory.is_secret ? '[Secret] ' : '';
-            lines.push(`- ${prefix}${memory.summary}`);
-        }
+            // Get message number(s) for this memory
+            const msgIds = memory.message_ids || [];
+            let msgLabel = '';
+            if (msgIds.length === 1) {
+                msgLabel = `(msg #${msgIds[0]})`;
+            } else if (msgIds.length > 1) {
+                const minMsg = Math.min(...msgIds);
+                const maxMsg = Math.max(...msgIds);
+                msgLabel = `(msgs #${minMsg}-${maxMsg})`;
+            }
+            // Importance indicator: ★ for each level (1-5)
+            const importance = memory.importance || 3;
+            const importanceLabel = '★'.repeat(importance);
+            lines.push(`${index + 1}. ${msgLabel} [${importanceLabel}] ${prefix}${memory.summary}`);
+        });
     }
 
     lines.push(`[End ${characterName}'s Memory]`);
@@ -1173,10 +1588,11 @@ function injectContext(contextText) {
 }
 
 /**
- * Update the persistent injection (for automatic mode)
+ * Update the injection (for automatic mode)
  * This rebuilds and re-injects context based on current state
+ * Uses smart retrieval if enabled in settings
  */
-async function updatePersistentInjection() {
+async function updateInjection() {
     const settings = extension_settings[extensionName];
 
     // Clear injection if disabled or not in automatic mode
@@ -1199,26 +1615,35 @@ async function updatePersistentInjection() {
         return;
     }
 
-    const characterName = context.name2;
     const activeCharacters = getActiveCharacters();
 
-    // Get character's known events (POV filtering)
-    const characterState = data[CHARACTERS_KEY]?.[characterName];
-    const knownEventIds = characterState?.known_events || [];
+    // Get POV context (different behavior for group chat vs narrator mode)
+    const { povCharacters, isGroupChat } = getPOVContext();
 
-    // Filter memories by POV (case-insensitive)
-    const charNameLower = characterName.toLowerCase();
+    // Collect known events from all POV characters
+    const knownEventIds = new Set();
+    for (const charName of povCharacters) {
+        const charState = data[CHARACTERS_KEY]?.[charName];
+        if (charState?.known_events) {
+            for (const eventId of charState.known_events) {
+                knownEventIds.add(eventId);
+            }
+        }
+    }
+
+    // Filter memories by POV - memories that ANY of the POV characters know
+    const povCharactersLower = povCharacters.map(c => c.toLowerCase());
     const accessibleMemories = memories.filter(m => {
-        if (m.witnesses?.some(w => w.toLowerCase() === charNameLower)) return true;
-        if (!m.is_secret && m.characters_involved?.some(c => c.toLowerCase() === charNameLower)) return true;
-        if (knownEventIds.includes(m.id)) return true;
+        if (m.witnesses?.some(w => povCharactersLower.includes(w.toLowerCase()))) return true;
+        if (!m.is_secret && m.characters_involved?.some(c => povCharactersLower.includes(c.toLowerCase()))) return true;
+        if (knownEventIds.has(m.id)) return true;
         return false;
     });
 
     // Fallback to all memories if POV filter is too strict
     let memoriesToUse = accessibleMemories;
     if (accessibleMemories.length === 0 && memories.length > 0) {
-        log('Persistent injection: POV filter returned 0, using all memories');
+        log('Injection: POV filter returned 0, using all memories');
         memoriesToUse = memories;
     }
 
@@ -1227,6 +1652,9 @@ async function updatePersistentInjection() {
         return;
     }
 
+    // Use first POV character for formatting (or context name for narrator mode)
+    const primaryCharacter = isGroupChat ? povCharacters[0] : context.name2;
+
     // Get recent context for relevance matching
     const recentMessages = context.chat
         .filter(m => !m.is_system)
@@ -1234,11 +1662,11 @@ async function updatePersistentInjection() {
         .map(m => m.mes)
         .join('\n');
 
-    // Select relevant memories
+    // Select relevant memories - uses smart retrieval if enabled in settings
     const relevantMemories = await selectRelevantMemories(
         memoriesToUse,
         recentMessages,
-        characterName,
+        primaryCharacter,
         activeCharacters,
         settings.maxMemoriesPerRetrieval
     );
@@ -1249,21 +1677,25 @@ async function updatePersistentInjection() {
     }
 
     // Get relationship and emotional context
-    const relationshipContext = getRelationshipContext(data, characterName, activeCharacters);
-    const emotionalState = characterState?.current_emotion || 'neutral';
+    const relationshipContext = getRelationshipContext(data, primaryCharacter, activeCharacters);
+    const primaryCharState = data[CHARACTERS_KEY]?.[primaryCharacter];
+    const emotionalState = primaryCharState?.current_emotion || 'neutral';
+
+    // Format header based on mode
+    const headerName = isGroupChat ? primaryCharacter : 'Scene';
 
     // Format and inject
     const formattedContext = formatContextForInjection(
         relevantMemories,
         relationshipContext,
         emotionalState,
-        characterName,
+        headerName,
         settings.tokenBudget
     );
 
     if (formattedContext) {
         injectContext(formattedContext);
-        log(`Persistent injection updated: ${relevantMemories.length} memories`);
+        log(`Injection updated: ${relevantMemories.length} memories`);
     }
 }
 
@@ -1294,6 +1726,117 @@ function getActiveCharacters() {
     }
 
     return characters;
+}
+
+/**
+ * Detect characters present in recent messages (for narrator mode)
+ * Scans message content for character names from stored memories
+ * @param {number} messageCount - Number of recent messages to scan
+ * @returns {string[]} - List of detected character names
+ */
+function detectPresentCharactersFromMessages(messageCount = 2) {
+    const context = getContext();
+    const chat = context.chat || [];
+    const data = getOpenVaultData();
+
+    // Get all known character names from memories
+    const knownCharacters = new Set();
+    for (const memory of (data[MEMORIES_KEY] || [])) {
+        for (const char of (memory.characters_involved || [])) {
+            knownCharacters.add(char.toLowerCase());
+        }
+        for (const witness of (memory.witnesses || [])) {
+            knownCharacters.add(witness.toLowerCase());
+        }
+    }
+    // Also add from character states
+    for (const charName of Object.keys(data[CHARACTERS_KEY] || {})) {
+        knownCharacters.add(charName.toLowerCase());
+    }
+
+    // Add user and main character
+    if (context.name1) knownCharacters.add(context.name1.toLowerCase());
+    if (context.name2) knownCharacters.add(context.name2.toLowerCase());
+
+    // Scan recent messages
+    const recentMessages = chat
+        .filter(m => !m.is_system)
+        .slice(-messageCount);
+
+    const presentCharacters = new Set();
+
+    for (const msg of recentMessages) {
+        const text = (msg.mes || '').toLowerCase();
+        const name = (msg.name || '').toLowerCase();
+
+        // Add message sender
+        if (name) {
+            presentCharacters.add(name);
+        }
+
+        // Scan message content for character names
+        for (const charName of knownCharacters) {
+            if (text.includes(charName)) {
+                presentCharacters.add(charName);
+            }
+        }
+    }
+
+    // Convert back to original case by finding matches
+    const result = [];
+    for (const lowerName of presentCharacters) {
+        // Try to find original casing from data
+        for (const charName of Object.keys(data[CHARACTERS_KEY] || {})) {
+            if (charName.toLowerCase() === lowerName) {
+                result.push(charName);
+                break;
+            }
+        }
+        // Fallback: check context names
+        if (!result.some(r => r.toLowerCase() === lowerName)) {
+            if (context.name1?.toLowerCase() === lowerName) result.push(context.name1);
+            else if (context.name2?.toLowerCase() === lowerName) result.push(context.name2);
+            else result.push(lowerName); // Keep lowercase if no match found
+        }
+    }
+
+    log(`Detected present characters: ${result.join(', ')}`);
+    return result;
+}
+
+/**
+ * Get POV characters for memory filtering
+ * - Group chat: Use the responding character's name (true POV)
+ * - Solo chat: Use characters detected in recent messages (narrator mode)
+ * @returns {{ povCharacters: string[], isGroupChat: boolean }}
+ */
+function getPOVContext() {
+    const context = getContext();
+    const isGroupChat = !!context.groupId;
+
+    if (isGroupChat) {
+        // Group chat: Use the specific responding character
+        log(`Group chat mode: POV character = ${context.name2}`);
+        return {
+            povCharacters: [context.name2],
+            isGroupChat: true
+        };
+    } else {
+        // Solo chat (narrator mode): Detect characters from recent messages
+        const presentCharacters = detectPresentCharactersFromMessages(2);
+
+        // If no characters detected, fall back to context names
+        if (presentCharacters.length === 0) {
+            presentCharacters.push(context.name2);
+            if (context.name1) presentCharacters.push(context.name1);
+        }
+
+        log(`Narrator mode: POV characters = ${presentCharacters.join(', ')}`);
+        return {
+            povCharacters: presentCharacters,
+            isGroupChat: false
+        };
+    }
 }
 
 /**
