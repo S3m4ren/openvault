@@ -638,6 +638,15 @@ async function handleOpenVaultSend() {
         // Auto-hide old messages before building context
         await autoHideOldMessages();
 
+        // Skip retrieval if no memories exist yet
+        const data = getOpenVaultData();
+        const memories = data[MEMORIES_KEY] || [];
+        if (memories.length === 0) {
+            log('>>> Skipping retrieval - no memories yet');
+            await sendTextareaMessage();
+            return;
+        }
+
         setStatus('retrieving');
 
         // Get pending user message for context-aware retrieval
