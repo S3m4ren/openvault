@@ -22,6 +22,7 @@ const CHARACTERS_KEY = 'character_states';
 const RELATIONSHIPS_KEY = 'relationships';
 const LAST_PROCESSED_KEY = 'last_processed_message_id';
 const LAST_BATCH_KEY = 'last_extraction_batch';
+const EXTRACTED_BATCHES_KEY = 'extracted_batches';
 
 // Default settings
 const defaultSettings = {
@@ -115,6 +116,7 @@ function getOpenVaultData() {
             [CHARACTERS_KEY]: {},
             [RELATIONSHIPS_KEY]: {},
             [LAST_PROCESSED_KEY]: -1,
+            [EXTRACTED_BATCHES_KEY]: [],
         };
     }
     return context.chatMetadata[METADATA_KEY];
@@ -735,7 +737,14 @@ function onChatChanged() {
 /**
  * Handle message received event (automatic mode)
  * Extracts memories AFTER AI responds - this avoids conflicts with generation
- * Excludes the last user+assistant pair to avoid extracting swiped messages
+ *
+ * Batching logic:
+ * - Tracks the last extracted batch and extracts the next one when available
+ * - Keeps one batch as buffer (for swipe safety)
+ * - Example with batch size 10, last extracted batch 3:
+ *   - At 55 messages: can extract batch 4 (messages 40-49), buffer is 50-54
+ *   - At 65 messages: can extract batch 5 (messages 50-59), buffer is 60-64
+ * - Tracks extracted batch numbers to prevent duplicate extraction
  */
 async function onMessageReceived(messageId) {
     const settings = extension_settings[extensionName];
@@ -762,45 +771,93 @@ async function onMessageReceived(messageId) {
         return;
     }
 
-    log(`AI message received: ${messageId}, checking if extraction needed`);
-
-    // Check if we should extract (every N messages)
     const data = getOpenVaultData();
-    const lastProcessedId = data[LAST_PROCESSED_KEY] || -1;
-    const messageCount = settings.messagesPerExtraction || 5;
+    const messageCount = settings.messagesPerExtraction || 10;
 
-    // Get extractable messages: exclude the last 2 messages (most recent user + assistant)
-    // This prevents extracting messages that might be swiped
+    // Get all non-system messages
     const nonSystemMessages = chat
         .map((m, idx) => ({ ...m, idx }))
         .filter(m => !m.is_system);
 
-    // Exclude last 2 messages (the user message that triggered this + the AI response)
-    const safeMessages = nonSystemMessages.slice(0, -2);
+    const totalMessages = nonSystemMessages.length;
 
-    // Count unprocessed safe messages
-    const unprocessedMessages = safeMessages.filter(m => m.idx > lastProcessedId);
+    // Get the highest extracted batch number (-1 if none extracted yet)
+    const extractedBatches = data[EXTRACTED_BATCHES_KEY] || [];
+    const highestExtractedBatch = extractedBatches.length > 0 ? Math.max(...extractedBatches) : -1;
 
-    // Extract only when we have exactly a complete batch (divisible by batch size)
-    // This ensures proper batching - partial batches wait until complete
-    if (unprocessedMessages.length > 0 && unprocessedMessages.length % messageCount === 0) {
-        log(`Automatic extraction: ${unprocessedMessages.length} unprocessed messages (batch size: ${messageCount}), excluding last 2`);
+    // Calculate the next batch to extract
+    const nextBatchToExtract = highestExtractedBatch + 1;
 
-        operationState.extractionInProgress = true;
-        try {
-            // Extract the first batch of messages (oldest first, to process in order)
-            const safeMessageIds = unprocessedMessages.slice(0, messageCount).map(m => m.idx);
-            await extractMemories(safeMessageIds);
-            // Note: No updateInjection() here - it will be called before NEXT generation
-            // Newly extracted memories are too recent to include anyway
-        } catch (error) {
-            console.error('[OpenVault] Automatic extraction error:', error);
-        } finally {
-            operationState.extractionInProgress = false;
+    // Calculate how many complete batches worth of messages we have
+    const totalCompleteBatches = Math.floor(totalMessages / messageCount);
+
+    // We need the batch we want to extract PLUS one buffer batch
+    // So to extract batch N, we need at least N+2 complete batches of messages
+    // Example: to extract batch 4 (messages 40-49), we need at least 60 messages (6 batches)
+    //          so batch 5 (50-59) acts as buffer
+    const requiredBatches = nextBatchToExtract + 2;
+
+    log(`AI message received: ${messageId}, total: ${totalMessages}, complete batches: ${totalCompleteBatches}, last extracted: ${highestExtractedBatch}, next to extract: ${nextBatchToExtract}, required: ${requiredBatches}`);
+
+    if (totalCompleteBatches < requiredBatches) {
+        const messagesNeeded = requiredBatches * messageCount;
+        const remaining = messagesNeeded - totalMessages;
+        log(`Not enough messages yet: have ${totalMessages}, need ${messagesNeeded} (${remaining} more) to safely extract batch ${nextBatchToExtract}`);
+        return;
+    }
+
+    // Double-check this batch hasn't been extracted (safety check)
+    if (extractedBatches.includes(nextBatchToExtract)) {
+        log(`Batch ${nextBatchToExtract} already extracted, skipping`);
+        return;
+    }
+
+    // Calculate message range for this batch (0-indexed)
+    const startIdx = nextBatchToExtract * messageCount;
+    const endIdx = startIdx + messageCount;
+    const batchMessages = nonSystemMessages.slice(startIdx, endIdx);
+
+    if (batchMessages.length !== messageCount) {
+        log(`Batch ${nextBatchToExtract} has wrong size (${batchMessages.length}/${messageCount}), skipping`);
+        return;
+    }
+
+    log(`Extracting batch ${nextBatchToExtract} (messages ${startIdx}-${endIdx - 1}, indices: ${batchMessages.map(m => m.idx).join(',')})`);
+
+    // Show extraction indicator
+    setStatus('extracting');
+    toastr.info(`Extracting memories (batch ${nextBatchToExtract + 1}, messages ${startIdx + 1}-${endIdx})...`, 'OpenVault', {
+        timeOut: 0,
+        extendedTimeOut: 0,
+        tapToDismiss: false,
+        toastClass: 'toast openvault-extracting-toast'
+    });
+
+    operationState.extractionInProgress = true;
+    try {
+        const messageIds = batchMessages.map(m => m.idx);
+        await extractMemories(messageIds);
+
+        // Mark this batch as extracted
+        data[EXTRACTED_BATCHES_KEY] = data[EXTRACTED_BATCHES_KEY] || [];
+        if (!data[EXTRACTED_BATCHES_KEY].includes(nextBatchToExtract)) {
+            data[EXTRACTED_BATCHES_KEY].push(nextBatchToExtract);
         }
-    } else {
-        const remaining = messageCount - (unprocessedMessages.length % messageCount);
-        log(`Skipping extraction: ${unprocessedMessages.length} unprocessed messages, need ${remaining} more to complete batch of ${messageCount}`);
+        await saveOpenVaultData();
+
+        log(`Batch ${nextBatchToExtract} extracted and marked`);
+
+        // Clear the persistent toast and show success
+        $('.openvault-extracting-toast').remove();
+        toastr.success(`Batch ${nextBatchToExtract + 1} extracted successfully`, 'OpenVault');
+    } catch (error) {
+        console.error('[OpenVault] Automatic extraction error:', error);
+        // Clear the persistent toast and show error
+        $('.openvault-extracting-toast').remove();
+        toastr.error(`Extraction failed: ${error.message}`, 'OpenVault');
+    } finally {
+        operationState.extractionInProgress = false;
+        setStatus('ready');
     }
 }
 
@@ -1273,11 +1330,23 @@ async function extractAllMessages() {
         return;
     }
 
-    toastr.info(`Extracting ${messagesToExtract.length} messages in ${completeBatches} batches (excluding last ${messageCount + remainder})...`, 'OpenVault');
+    // Show persistent progress toast
+    setStatus('extracting');
+    const $progressToast = $(toastr.info(
+        `Backfill: 0/${completeBatches} batches (0%)`,
+        'OpenVault - Extracting',
+        {
+            timeOut: 0,
+            extendedTimeOut: 0,
+            tapToDismiss: false,
+            toastClass: 'toast openvault-backfill-toast'
+        }
+    ));
 
-    // Reset last processed to start fresh
+    // Reset tracking to start fresh
     const data = getOpenVaultData();
     data[LAST_PROCESSED_KEY] = -1;
+    data[EXTRACTED_BATCHES_KEY] = []; // Clear extracted batches for fresh backfill
 
     // Process in batches
     let totalEvents = 0;
@@ -1287,10 +1356,21 @@ async function extractAllMessages() {
         const batch = messagesToExtract.slice(startIdx, startIdx + messageCount);
         const batchNum = i + 1;
 
+        // Update progress toast
+        const progress = Math.round((i / completeBatches) * 100);
+        $('.openvault-backfill-toast .toast-message').text(
+            `Backfill: ${i}/${completeBatches} batches (${progress}%) - Processing batch ${batchNum}...`
+        );
+
         try {
-            log(`Processing batch ${batchNum}/${completeBatches}...`);
+            log(`Processing batch ${batchNum}/${completeBatches} (batch index ${i})...`);
             const result = await extractMemories(batch);
             totalEvents += result?.events_created || 0;
+
+            // Mark this batch as extracted
+            if (!data[EXTRACTED_BATCHES_KEY].includes(i)) {
+                data[EXTRACTED_BATCHES_KEY].push(i);
+            }
 
             // Delay between batches to avoid rate limiting
             if (batchNum < completeBatches) {
@@ -1298,8 +1378,14 @@ async function extractAllMessages() {
             }
         } catch (error) {
             console.error('[OpenVault] Batch extraction error:', error);
+            $('.openvault-backfill-toast .toast-message').text(
+                `Backfill: ${i}/${completeBatches} - Batch ${batchNum} failed, continuing...`
+            );
         }
     }
+
+    // Clear progress toast
+    $('.openvault-backfill-toast').remove();
 
     // Reset operation state
     operationState.generationInProgress = false;
