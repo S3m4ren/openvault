@@ -1888,7 +1888,7 @@ function formatContextForInjection(memories, relationships, emotionalState, char
             return seqA - seqB;
         });
 
-        lines.push('Relevant memories (in chronological order):');
+        lines.push('Relevant memories (in chronological order, ★=minor to ★★★★★=critical):');
         sortedMemories.forEach((memory, index) => {
             const prefix = memory.is_secret ? '[Secret] ' : '';
             // Get message number(s) for this memory
