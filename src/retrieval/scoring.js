@@ -134,9 +134,10 @@ export function selectRelevantMemoriesSimple(memories, recentContext, characterN
         return { memory, score };
     });
 
-    // Sort by score and take top N
+    // Sort by score and take top N (or all if limit is -1)
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map(s => s.memory);
+    const limited = limit < 0 ? scored : scored.slice(0, limit);
+    return limited.map(s => s.memory);
 }
 
 /**
@@ -149,7 +150,8 @@ export function selectRelevantMemoriesSimple(memories, recentContext, characterN
  */
 export async function selectRelevantMemoriesSmart(memories, recentContext, characterName, limit) {
     if (memories.length === 0) return [];
-    if (memories.length <= limit) return memories; // No need to select if we have few enough
+    // If limit is -1 (no limit) or we have fewer memories than limit, return all
+    if (limit < 0 || memories.length <= limit) return memories;
 
     log(`Smart retrieval: analyzing ${memories.length} memories to select ${limit} most relevant`);
 

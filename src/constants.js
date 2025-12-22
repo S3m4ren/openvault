@@ -37,8 +37,8 @@ export const defaultSettings = {
 };
 
 // Timeout constants
-export const RETRIEVAL_TIMEOUT_MS = 30000; // 30 seconds max for retrieval
-export const GENERATION_LOCK_TIMEOUT_MS = 120000; // 2 minutes safety timeout
+export const RETRIEVAL_TIMEOUT_MS = 300000; // 5 minutes max for retrieval
+export const GENERATION_LOCK_TIMEOUT_MS = 300000; // 5 minutes safety timeout
 
 // Pagination constants
 export const MEMORIES_PER_PAGE = 10;

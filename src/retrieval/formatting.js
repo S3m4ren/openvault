@@ -121,7 +121,8 @@ export function formatContextForInjection(memories, relationships, emotionalInfo
     let result = lines.join('\n');
     const estimatedTokens = result.length / 4;
 
-    if (estimatedTokens > tokenBudget) {
+    // Skip truncation if tokenBudget is -1 (no limit)
+    if (tokenBudget >= 0 && estimatedTokens > tokenBudget) {
         // Truncate memories if needed
         const overhead = (lines.slice(0, 5).join('\n').length + lines.slice(-1).join('\n').length) / 4;
         const availableForMemories = tokenBudget - overhead;

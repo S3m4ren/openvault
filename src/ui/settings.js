@@ -75,10 +75,19 @@ function bindUIElements() {
         if (updateEventListenersFn) updateEventListenersFn();
     });
 
-    // Token budget slider
-    $('#openvault_token_budget').on('input', function() {
-        settings.tokenBudget = parseInt($(this).val());
-        $('#openvault_token_budget_value').text(settings.tokenBudget);
+    // Token budget input
+    $('#openvault_token_budget').on('change', function() {
+        const value = parseInt($(this).val());
+        settings.tokenBudget = isNaN(value) ? 1000 : value;
+        $(this).val(settings.tokenBudget);
+        saveSettingsDebounced();
+    });
+
+    // Max memories per retrieval input
+    $('#openvault_max_memories').on('change', function() {
+        const value = parseInt($(this).val());
+        settings.maxMemoriesPerRetrieval = isNaN(value) ? 10 : value;
+        $(this).val(settings.maxMemoriesPerRetrieval);
         saveSettingsDebounced();
     });
 
@@ -178,7 +187,7 @@ export function updateUI() {
     $('#openvault_enabled').prop('checked', settings.enabled);
     $('#openvault_automatic').prop('checked', settings.automaticMode);
     $('#openvault_token_budget').val(settings.tokenBudget);
-    $('#openvault_token_budget_value').text(settings.tokenBudget);
+    $('#openvault_max_memories').val(settings.maxMemoriesPerRetrieval);
     $('#openvault_debug').prop('checked', settings.debugMode);
 
     // Extraction settings
