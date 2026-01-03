@@ -42,6 +42,7 @@ export const defaultSettings = {
  export const defaultPerChatSettings = {
     cardType: 'rp',
     nameList: [],
+    canonicalDateTracking: false,
 };
 
 // Timeout constants

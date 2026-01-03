@@ -111,7 +111,15 @@ export function formatContextForInjection(memories, relationships, emotionalInfo
             // Importance indicator: star for each level (1-5)
             const importance = memory.importance || 3;
             const importanceLabel = '\u2605'.repeat(importance);
-            lines.push(`${index + 1}. ${msgLabel} [${importanceLabel}] ${prefix}${memory.summary}`);
+            const canonicalDate = memory.canonical_date ? `(date: ${memory.canonical_date})` : '';
+            const lineParts = [
+                `${index + 1}.`,
+                msgLabel,
+                canonicalDate,
+                `[${importanceLabel}]`,
+                `${prefix}${memory.summary}`,
+            ].filter(Boolean);
+            lines.push(lineParts.join(' '));
         });
     }
 

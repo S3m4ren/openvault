@@ -57,37 +57,28 @@ export async function loadSettings() {
 }
 
 /**
- * Saves the setting to chat.
+ * 
+ * @param {String} setting  - chosen perChatSetting
+ * @param {Object} value    - new value
  */
-async function saveCardTypeToChat(cardType) {
-  const data = getOpenVaultData();
-  data[PER_CHAT_SETTINGS_KEY] ??= {};
-  data[PER_CHAT_SETTINGS_KEY].cardType = cardType;
+async function savePerChatSettings(setting, value){
+    const data = getOpenVaultData()[PER_CHAT_SETTINGS_KEY];
+    if (Object.prototype.toString.call(value) === Object.prototype.toString.call(defaultPerChatSettings[setting])){
+        data[setting] = value;
 
-  await saveOpenVaultData();
+        await saveOpenVaultData();
+    }
+    
 }
+
 
 async function populateNameListFromCharacters() {
   const data = getOpenVaultData();
-  const characters = data?.[CHARACTERS_KEY];
 
-  if (!characters || typeof characters !== 'object') {
-    await saveNameListToChat([]);
-    renderNameListUI();
-    return;
-  }
+  const names = Object.keys(data[CHARACTERS_KEY]);
 
-  const names = Object.keys(characters);
-
-  await saveNameListToChat(names);
+  await savePerChatSettings('nameList', names);
   renderNameListUI();
-}
-
-async function saveNameListToChat(nameList) {
-  const data = getOpenVaultData();
-  data[PER_CHAT_SETTINGS_KEY] ??= {};
-  data[PER_CHAT_SETTINGS_KEY].nameList = Array.isArray(nameList) ? nameList : [];
-  await saveOpenVaultData();
 }
 
 function renderNameListUI() {
@@ -123,7 +114,7 @@ function renderNameListUI() {
     if (!Number.isFinite(idx) || idx < 0 || idx >= current.length) return;
 
     current.splice(idx, 1);
-    await saveNameListToChat(current);
+    await savePerChatSettings('nameList', current);
     renderNameListUI();
   });
 }
@@ -140,7 +131,7 @@ async function addNameFromInput() {
   current.push(value);
 
   // persist, then clear input, then re-render
-  await saveNameListToChat(current);
+  await savePerChatSettings('nameList', current);
   $input.val('');
   renderNameListUI();
 }
@@ -270,11 +261,10 @@ function bindUIElements() {
     // Card-Type setting
     $('#openvault_card_type').on('change', function() {
         const val = $(this).val() === 'rpg' ? 'rpg' : 'rp';
-        
-        saveCardTypeToChat(val);
+        savePerChatSettings('cardType', val);
     });
 
-    // Name List - add
+    // Name List - add button
     $('#openvault_name_add').on('click', async () => {
         await addNameFromInput();
     });
@@ -287,9 +277,15 @@ function bindUIElements() {
          }
     });
 
-    //populate nameList from characters
+    //Name List - populate nameList from characters
     $('#openvault_name_populate').on('click', async () => {
         await populateNameListFromCharacters();
+    });
+
+    //Canonical date tracking
+    $('#openvault_canonical_date_tracking').on('change', function() {
+        const val = $(this).is(':checked') === true ? true : false;
+        savePerChatSettings('canonicalDateTracking', val);
     });
 
     // Memory browser pagination
@@ -306,6 +302,7 @@ function bindUIElements() {
  */
 export function updateUI() {
     const settings = extension_settings[extensionName];
+    const per_chat_settings = getOpenVaultData().per_chat_settings;
 
     $('#openvault_enabled').prop('checked', settings.enabled);
     $('#openvault_automatic').prop('checked', settings.automaticMode);
@@ -329,10 +326,9 @@ export function updateUI() {
     // Backfill settings
     $('#openvault_backfill_rpm').val(settings.backfillMaxRPM);
 
-    //card Type settings
-    const data = getOpenVaultData();
-    const cardType = data?.[PER_CHAT_SETTINGS_KEY]?.cardType || 'rp';
-    $('#openvault_card_type').val(cardType);
+    //perChatSettings
+    $('#openvault_card_type').val(per_chat_settings.cardType);
+    $('#openvault_canonical_date_tracking').prop('checked', per_chat_settings['canonicalDateTracking']);
 
     // Populate profile selector
     populateProfileSelector();

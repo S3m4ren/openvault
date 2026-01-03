@@ -44,6 +44,7 @@ export function parseExtractionResult(jsonString, messages, characterName, userN
             characters_involved: event.characters_involved || [],
             witnesses: event.witnesses || event.characters_involved || [],
             location: event.location || 'unknown',
+            canonical_date: event.canonical_date || 'unkown', //checking for canonical date
             is_secret: event.is_secret || false,
             importance: Math.min(5, Math.max(1, event.importance || 3)), // Clamp to 1-5, default 3
             emotional_impact: event.emotional_impact || {},

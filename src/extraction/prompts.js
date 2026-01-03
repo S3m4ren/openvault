@@ -53,6 +53,8 @@ ${memorySummaries}
     const charList = Array.isArray(perChat.nameList) ? perChat.nameList : [];
 
     let namePrompt = '';
+    
+    //Creating Other Characters List if nameList is not empty
     if (charList.length) {
         namePrompt =
         '- Other Characters:\n' +
@@ -62,6 +64,7 @@ ${memorySummaries}
 
     const cardType = perChat.cardType || 'rp';
 
+    //Checking which cardtype is set.
     let characterPrompt = '';
     if (cardType === 'rp') {
         characterPrompt = `- Main character: ${characterName}\n${namePrompt}- User's character: ${userName}`;
@@ -69,8 +72,10 @@ ${memorySummaries}
         characterPrompt = `- User's character: ${userName}\n${namePrompt}`;
     }
 
-
-    return `You are analyzing roleplay messages to extract structured memory events.
+    //Checking if canonical date tracking is activated and assembling Prompt
+    if (!perChat.canonicalDateTracking){
+        //Non-date-tracking-prompt
+        return `You are analyzing roleplay messages to extract structured memory events.
 
 ## Characters
 ${characterPrompt}
@@ -111,4 +116,50 @@ Respond with a JSON array of events:
 \`\`\`
 
 If no significant events, respond with an empty array: []`;
+    } else {
+        //Date-tracking-prompt
+        return `You are analyzing roleplay messages to extract structured memory events.
+
+## Characters
+${characterPrompt}
+${characterContextSection}${memoryContextSection}
+## Messages to analyze:
+${messagesText}
+
+## Task
+Extract NEW significant events from these messages. Use the Character Context (if provided) to better understand motivations, personality traits, and relationship dynamics. For each event, identify:
+1. **event_type**: One of: "action", "revelation", "emotion_shift", "relationship_change"
+2. **importance**: 1-5 scale (1=minor detail, 2=notable, 3=significant, 4=major event, 5=critical/story-changing)
+3. **summary**: Brief description of what happened (1-2 sentences)
+4. **characters_involved**: List of character names directly involved
+5. **witnesses**: List of character names who observed this (important for POV filtering)
+6. **location**: Where this happened (if mentioned, otherwise "unknown")
+7. **canonical_date**: On which date did this happen (e.g. "Saturday, January 3, 2026")
+8. **is_secret**: Whether this information should only be known by witnesses
+9. **emotional_impact**: Object mapping character names to emotional changes (e.g., {"${characterName}": "growing trust", "${userName}": "surprised"})
+10. **relationship_impact**: Object describing relationship changes (e.g., {"${characterName}->${userName}": "trust increased"})
+
+Only extract events that are significant for character memory and story continuity. Skip mundane exchanges.
+${existingMemories.length > 0 ? 'Do NOT duplicate events from the "Previously Established Memories" section.' : ''}
+
+Respond with a JSON array of events:
+\`\`\`json
+[
+  {
+    "event_type": "...",
+    "importance": 3,
+    "summary": "...",
+    "characters_involved": [...],
+    "witnesses": [...],
+    "location": "...",
+    "canonical_date": "...",
+    "is_secret": false,
+    "emotional_impact": {...},
+    "relationship_impact": {...}
+  }
+]
+\`\`\`
+
+If no significant events, respond with an empty array: []`;
+    }
 }
