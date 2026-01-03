@@ -279,7 +279,7 @@ function bindUIElements() {
         await addNameFromInput();
     });
 
-    // allow Enter in the input
+    // Name List - allow Enter in the input
     $('#openvault_name_input').on('keydown', async function (e) {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -287,6 +287,7 @@ function bindUIElements() {
          }
     });
 
+    //populate nameList from characters
     $('#openvault_name_populate').on('click', async () => {
         await populateNameListFromCharacters();
     });

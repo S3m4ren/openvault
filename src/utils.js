@@ -44,14 +44,17 @@ export function getOpenVaultData() {
             [RELATIONSHIPS_KEY]: {},
             [LAST_PROCESSED_KEY]: -1,
             [EXTRACTED_BATCHES_KEY]: [],
+            
+            //Adding chat dependent settings
             [PER_CHAT_SETTINGS_KEY]: {...defaultPerChatSettings},
         };
     }
 
     //Upgrading existings chats to contain per-chat-settings
     context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY] ??= { ...defaultPerChatSettings };
-    context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY].cardType ??= defaultPerChatSettings.cardType;
-    context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY].nameList ??= [...defaultPerChatSettings.nameList];
+    for (const[key, value] of Object.entries(defaultPerChatSettings)) {
+        context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY][key] ??= value;
+    }
 
     return context.chatMetadata[METADATA_KEY];
 }

@@ -11,7 +11,7 @@ import { eventSource, event_types, saveChatConditional } from '../../../../scrip
 import { getContext, extension_settings } from '../../../extensions.js';
 
 // Import from modular structure
-import { extensionName, METADATA_KEY } from './src/constants.js';
+import { extensionName, METADATA_KEY, MEMORIES_KEY, PER_CHAT_SETTINGS_KEY } from './src/constants.js';
 import { getOpenVaultData, showToast, log } from './src/utils.js';
 import { setChatLoadingCooldown } from './src/state.js';
 import { loadSettings, setExternalFunctions } from './src/ui/settings.js';
@@ -20,7 +20,6 @@ import { refreshAllUI } from './src/ui/browser.js';
 import { extractMemories, extractAllMessages } from './src/extraction/extract.js';
 import { retrieveAndInjectContext } from './src/retrieval/retrieve.js';
 import { updateEventListeners } from './src/events.js';
-import { MEMORIES_KEY } from './src/constants.js';
 
 // Re-export extensionName for external use
 export { extensionName };
@@ -35,7 +34,10 @@ async function deleteCurrentChatData() {
 
     const context = getContext();
     if (context.chatMetadata) {
-        delete context.chatMetadata[METADATA_KEY];
+        
+        //exempting chat dependet settings from deletion through "Delete Current Chat Memories"
+        const toDelete = Object.keys(context.chatMetadata[METADATA_KEY]);
+        toDelete.forEach(key => {if (key !== PER_CHAT_SETTINGS_KEY) {delete context.chatMetadata[METADATA_KEY][key]}});
         await saveChatConditional();
     }
 
