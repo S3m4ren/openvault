@@ -15,6 +15,7 @@ export const RELATIONSHIPS_KEY = 'relationships';
 export const LAST_PROCESSED_KEY = 'last_processed_message_id';
 export const LAST_BATCH_KEY = 'last_extraction_batch';
 export const EXTRACTED_BATCHES_KEY = 'extracted_batches';
+export const PER_CHAT_SETTINGS_KEY = 'per_chat_settings';
 
 // Default settings
 export const defaultSettings = {
@@ -29,11 +30,18 @@ export const defaultSettings = {
     messagesPerExtraction: 10,
     memoryContextCount: -1,
     smartRetrievalEnabled: true,
+    maxTokensExtractionResponse: 2000,
     // Auto-hide settings
     autoHideEnabled: true,
     autoHideThreshold: 50,
     // Backfill settings
     backfillMaxRPM: 30,
+};
+
+// Default per-chat-settings
+ export const defaultPerChatSettings = {
+    cardType: 'rp',
+    nameList: [],
 };
 
 // Timeout constants

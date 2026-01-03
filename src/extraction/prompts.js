@@ -3,6 +3,8 @@
  *
  * Builds prompts for memory extraction from messages.
  */
+import { CHARACTERS_KEY, PER_CHAT_SETTINGS_KEY} from '../constants.js';
+import { getOpenVaultData} from '../utils.js';
 
 /**
  * Build the extraction prompt
@@ -46,12 +48,32 @@ ${memorySummaries}
 
 `;
     }
+    const data = getOpenVaultData() || {};
+    const perChat = data[PER_CHAT_SETTINGS_KEY] || {};
+    const charList = Array.isArray(perChat.nameList) ? perChat.nameList : [];
+
+    let namePrompt = '';
+    if (charList.length) {
+        namePrompt =
+        '- Other Characters:\n' +
+        charList.map(n => `  - ${n}`).join('\n') +
+        '\n';
+    }
+
+    const cardType = perChat.cardType || 'rp';
+
+    let characterPrompt = '';
+    if (cardType === 'rp') {
+        characterPrompt = `- Main character: ${characterName}\n${namePrompt}- User's character: ${userName}`;
+    } else {
+        characterPrompt = `- User's character: ${userName}\n${namePrompt}`;
+    }
+
 
     return `You are analyzing roleplay messages to extract structured memory events.
 
 ## Characters
-- Main character: ${characterName}
-- User's character: ${userName}
+${characterPrompt}
 ${characterContextSection}${memoryContextSection}
 ## Messages to analyze:
 ${messagesText}

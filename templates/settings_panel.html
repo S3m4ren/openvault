@@ -19,6 +19,19 @@
                 </label>
             </div>
 
+            
+            <!-- Roleplay Mode (between Automatic Mode and Manual Actions) -->
+            <div class="openvault-section">
+                <label for="openvault_card_type"><b>Card-Type</b></label>
+                <select id="openvault_card_type" class="text_pole">
+                    <option value="rp">RP-Mode</option>
+                    <option value="rpg">RPG-Mode</option>
+                </select>
+                <small class="openvault-hint">
+                    RP-Mode: For Character Cards that represent a single character. RPG-Mode: For scenario-Type cards, where the Character Card represents a Narrator/ Gamemaster, that controls multiple Characters.
+                </small>
+            </div>
+            
             <!-- Manual Actions -->
             <div class="openvault-section">
                 <h4>Manual Actions</h4>
@@ -50,6 +63,10 @@
                     <option value="">Use current connection</option>
                 </select>
                 <small class="openvault-hint">LLM profile used for smart retrieval (can use faster model)</small>
+
+                <label for="openvault_max_response_tokens_extraction">Maximum Response Tokens Extractions</label>
+                <input type="number" id="openvault_max_response_tokens_extraction" class="text_pole" min="1" value="2000" />
+                <small class="openvault-hint">Maximum amount of tokens for the Exctraction response</small>
 
                 <label for="openvault_token_budget">Token Budget</label>
                 <input type="number" id="openvault_token_budget" class="text_pole" min="-1" value="1000" />
@@ -177,6 +194,32 @@
                     <div class="inline-drawer-content">
                         <div id="openvault_relationships" class="openvault-relationship-list">
                             <p class="openvault-placeholder">No relationship data yet</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Name List (collapsed by default) -->
+            <div class="openvault-section">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <span>Name List</span>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <div class="openvault-button-row">
+                            <input type="text" id="openvault_name_input" class="text_pole" placeholder="Add a name..." />
+                            <button id="openvault_name_add" class="menu_button">
+                                <i class="fa-solid fa-plus"></i> Add
+                            </button>
+                        </div>
+                        <div class="openvault-button-row">
+                            <button id="openvault_name_populate" class="menu_button">
+                                <i class="fa-solid fa-user-group"></i> Populate from Characters
+                            </button>
+                        </div>
+                        <div id="openvault_name_list" class="openvault-memory-list">
+                            <p class="openvault-placeholder">No names yet</p>
                         </div>
                     </div>
                 </div>

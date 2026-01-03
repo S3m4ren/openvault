@@ -77,11 +77,14 @@ export async function callLLMForExtraction(prompt) {
             { role: 'user', content: prompt }
         ];
 
+        
         // Send request via ConnectionManagerRequestService
+        const settings = extension_settings[extensionName];
+        const maxTokensExtractionResponse = settings.maxTokensExtractionResponse;
         const result = await ConnectionManagerRequestService.sendRequest(
             profileId,
             messages,
-            2000, // max tokens
+            maxTokensExtractionResponse, // max tokens
             {
                 includePreset: true,
                 includeInstruct: true,

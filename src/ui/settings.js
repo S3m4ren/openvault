@@ -6,8 +6,9 @@
 
 import { saveSettingsDebounced } from '../../../../../../script.js';
 import { extension_settings } from '../../../../../extensions.js';
-import { extensionName, extensionFolderPath, defaultSettings } from '../constants.js';
+import { extensionName, extensionFolderPath, defaultSettings, defaultPerChatSettings, PER_CHAT_SETTINGS_KEY, CHARACTERS_KEY } from '../constants.js';
 import { refreshAllUI, renderMemoryBrowser, prevPage, nextPage, resetAndRender } from './browser.js';
+import { getOpenVaultData, saveOpenVaultData, escapeHtml } from '../utils.js';
 
 // References to external functions (set during init)
 let updateEventListenersFn = null;
@@ -56,6 +57,95 @@ export async function loadSettings() {
 }
 
 /**
+ * Saves the setting to chat.
+ */
+async function saveCardTypeToChat(cardType) {
+  const data = getOpenVaultData();
+  data[PER_CHAT_SETTINGS_KEY] ??= {};
+  data[PER_CHAT_SETTINGS_KEY].cardType = cardType;
+
+  await saveOpenVaultData();
+}
+
+async function populateNameListFromCharacters() {
+  const data = getOpenVaultData();
+  const characters = data?.[CHARACTERS_KEY];
+
+  if (!characters || typeof characters !== 'object') {
+    await saveNameListToChat([]);
+    renderNameListUI();
+    return;
+  }
+
+  const names = Object.keys(characters);
+
+  await saveNameListToChat(names);
+  renderNameListUI();
+}
+
+async function saveNameListToChat(nameList) {
+  const data = getOpenVaultData();
+  data[PER_CHAT_SETTINGS_KEY] ??= {};
+  data[PER_CHAT_SETTINGS_KEY].nameList = Array.isArray(nameList) ? nameList : [];
+  await saveOpenVaultData();
+}
+
+function renderNameListUI() {
+  const data = getOpenVaultData();
+  const list = data?.[PER_CHAT_SETTINGS_KEY]?.nameList || [];
+  const $container = $('#openvault_name_list');
+
+  $container.empty();
+
+  if (!list.length) {
+    $container.html('<p class="openvault-placeholder">No names yet</p>');
+    return;
+  }
+
+  for (let i = 0; i < list.length; i++) {
+    const name = list[i];
+    $container.append(`
+      <div class="openvault-memory-item" style="padding:8px; display:flex; align-items:center; justify-content:space-between;">
+        <div>${escapeHtml(name)}</div>
+        <button class="menu_button openvault-name-delete" data-index="${i}" title="Remove">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+    `);
+  }
+
+  // bind delete buttons
+  $container.find('.openvault-name-delete').on('click', async function () {
+    const idx = parseInt($(this).data('index'));
+    const freshData = getOpenVaultData();
+    const current = [...(freshData?.[PER_CHAT_SETTINGS_KEY]?.nameList || [])];
+
+    if (!Number.isFinite(idx) || idx < 0 || idx >= current.length) return;
+
+    current.splice(idx, 1);
+    await saveNameListToChat(current);
+    renderNameListUI();
+  });
+}
+
+async function addNameFromInput() {
+  const $input = $('#openvault_name_input');
+  const raw = ($input.val() || '').toString();
+  const value = raw.trim();
+
+  if (!value) return;
+
+  const data = getOpenVaultData();
+  const current = [...(data?.[PER_CHAT_SETTINGS_KEY]?.nameList || [])];
+  current.push(value);
+
+  // persist, then clear input, then re-render
+  await saveNameListToChat(current);
+  $input.val('');
+  renderNameListUI();
+}
+
+/**
  * Bind UI elements to settings
  */
 function bindUIElements() {
@@ -101,6 +191,14 @@ function bindUIElements() {
     $('#openvault_messages_per_extraction').on('input', function() {
         settings.messagesPerExtraction = parseInt($(this).val());
         $('#openvault_messages_per_extraction_value').text(settings.messagesPerExtraction);
+        saveSettingsDebounced();
+    });
+
+    // Maximum Response Tokens Extractions
+    $('#openvault_max_response_tokens_extraction').on('change', function() {
+        const value = parseInt($(this).val());
+        settings.maxTokensExtractionResponse = isNaN(value) ? 2000 : value;
+        $(this).val(settings.maxTokensExtractionResponse);
         saveSettingsDebounced();
     });
 
@@ -169,6 +267,30 @@ function bindUIElements() {
         saveSettingsDebounced();
     });
 
+    // Card-Type setting
+    $('#openvault_card_type').on('change', function() {
+        const val = $(this).val() === 'rpg' ? 'rpg' : 'rp';
+        
+        saveCardTypeToChat(val);
+    });
+
+    // Name List - add
+    $('#openvault_name_add').on('click', async () => {
+        await addNameFromInput();
+    });
+
+    // allow Enter in the input
+    $('#openvault_name_input').on('keydown', async function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            await addNameFromInput();
+         }
+    });
+
+    $('#openvault_name_populate').on('click', async () => {
+        await populateNameListFromCharacters();
+    });
+
     // Memory browser pagination
     $('#openvault_prev_page').on('click', () => prevPage());
     $('#openvault_next_page').on('click', () => nextPage());
@@ -196,6 +318,7 @@ export function updateUI() {
     $('#openvault_memory_context_count').val(settings.memoryContextCount);
     $('#openvault_memory_context_count_value').text(settings.memoryContextCount < 0 ? 'All' : settings.memoryContextCount);
     $('#openvault_smart_retrieval').prop('checked', settings.smartRetrievalEnabled);
+    $('#openvault_max_response_tokens_extraction').val(settings.maxTokensExtractionResponse);
 
     // Auto-hide settings
     $('#openvault_auto_hide').prop('checked', settings.autoHideEnabled);
@@ -205,8 +328,15 @@ export function updateUI() {
     // Backfill settings
     $('#openvault_backfill_rpm').val(settings.backfillMaxRPM);
 
+    //card Type settings
+    const data = getOpenVaultData();
+    const cardType = data?.[PER_CHAT_SETTINGS_KEY]?.cardType || 'rp';
+    $('#openvault_card_type').val(cardType);
+
     // Populate profile selector
     populateProfileSelector();
+
+    renderNameListUI();
 
     // Refresh all UI components
     refreshAllUI();

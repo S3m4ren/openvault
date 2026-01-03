@@ -13,6 +13,7 @@ import { setStatus } from './ui/status.js';
 import { refreshAllUI, resetMemoryBrowserPage } from './ui/browser.js';
 import { extractMemories } from './extraction/extract.js';
 import { updateInjection } from './retrieval/retrieve.js';
+import { updateUI } from './ui/settings.js'
 
 /**
  * Auto-hide old messages beyond the threshold
@@ -167,6 +168,7 @@ export function onChatChanged() {
 
     // Refresh UI on chat change
     refreshAllUI();
+    updateUI();
     setStatus('ready');
 }
 

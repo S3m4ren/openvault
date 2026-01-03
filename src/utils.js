@@ -7,7 +7,7 @@
 import { getContext } from '../../../../extensions.js';
 import { saveChatConditional, setExtensionPrompt, extension_prompt_types } from '../../../../../script.js';
 import { extension_settings } from '../../../../extensions.js';
-import { extensionName, METADATA_KEY, MEMORIES_KEY, CHARACTERS_KEY, RELATIONSHIPS_KEY, LAST_PROCESSED_KEY, EXTRACTED_BATCHES_KEY } from './constants.js';
+import { extensionName, METADATA_KEY, MEMORIES_KEY, CHARACTERS_KEY, RELATIONSHIPS_KEY, LAST_PROCESSED_KEY, EXTRACTED_BATCHES_KEY, PER_CHAT_SETTINGS_KEY, defaultPerChatSettings } from './constants.js';
 
 /**
  * Wrap a promise with a timeout
@@ -44,8 +44,15 @@ export function getOpenVaultData() {
             [RELATIONSHIPS_KEY]: {},
             [LAST_PROCESSED_KEY]: -1,
             [EXTRACTED_BATCHES_KEY]: [],
+            [PER_CHAT_SETTINGS_KEY]: {...defaultPerChatSettings},
         };
     }
+
+    //Upgrading existings chats to contain per-chat-settings
+    context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY] ??= { ...defaultPerChatSettings };
+    context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY].cardType ??= defaultPerChatSettings.cardType;
+    context.chatMetadata[METADATA_KEY][PER_CHAT_SETTINGS_KEY].nameList ??= [...defaultPerChatSettings.nameList];
+
     return context.chatMetadata[METADATA_KEY];
 }
 
